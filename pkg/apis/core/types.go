@@ -1966,6 +1966,18 @@ const (
 	PullIfNotPresent PullPolicy = "IfNotPresent"
 )
 
+type ResourceResizePolicy string
+
+const (
+	RestartNotRequired ResourceResizePolicy = "RestartNotRequired"
+	RestartRequired    ResourceResizePolicy = "RestartRequired"
+)
+
+type ContainerResizePolicy struct {
+	ResourceName ResourceName
+	Policy       ResourceResizePolicy
+}
+
 // PreemptionPolicy describes a policy for if/when to preempt a pod.
 type PreemptionPolicy string
 
@@ -2053,6 +2065,10 @@ type Container struct {
 	// Compute resource requirements.
 	// +optional
 	Resources ResourceRequirements
+	// Resources resize policy for the container.
+	// +featureGate=InPlacePodVerticalScaling
+	// +optional
+	ResizePolicy []ContainerResizePolicy
 	// +optional
 	VolumeMounts []VolumeMount
 	// volumeDevices is the list of block devices to be used by the container.
@@ -2204,6 +2220,17 @@ type ContainerStatus struct {
 	// +optional
 	ContainerID string
 	Started     *bool
+	// ResourcesAllocated represents the compute resources allocated for this container by the
+	// node. Kubelet sets this value to Container.Resources.Requests upon successful pod admission
+	// and after successfully admitting desired pod resize.
+	// +featureGate=InPlacePodVerticalScaling
+	// +optional
+	ResourcesAllocated ResourceList
+	// Resources represents the compute resource requests and limits that have been successfully
+	// enacted on the running container after it has been started or has been successfully resized.
+	// +featureGate=InPlacePodVerticalScaling
+	// +optional
+	Resources *ResourceRequirements
 }
 
 // PodPhase is a label for the condition of a pod at the current time.
@@ -2261,6 +2288,22 @@ type PodCondition struct {
 	// +optional
 	Message string
 }
+
+// PodResizeStatus shows status of desired resize of a pod's containers.
+type PodResizeStatus string
+
+const (
+	// Pod resources resize has been requested and will be evaluated by node.
+	PodResizeStatusProposed PodResizeStatus = "Proposed"
+	// Pod resources resize has been applied by node
+	PodResizeStatusCompleted PodResizeStatus = "Completed"
+	// Pod resources resize has been accepted by node and is being actuated.
+	PodResizeStatusInProgress PodResizeStatus = "InProgress"
+	// Node cannot resize the pod at this time and will keep retrying.
+	PodResizeStatusDeferred PodResizeStatus = "Deferred"
+	// Requested pod resize is rejected and will not be re-evaluated.
+	PodResizeStatusInfeasible PodResizeStatus = "Rejected"
+)
 
 // RestartPolicy describes how the container should be restarted.
 // Only one of the following restart policies may be specified.
@@ -2916,8 +2959,9 @@ type PodDNSConfigOption struct {
 
 // PodIP represents the IP address of a pod.
 // IP address information. Each entry includes:
-//    IP: An IP address allocated to the pod. Routable at least within
-//        the cluster.
+//
+//	IP: An IP address allocated to the pod. Routable at least within
+//	    the cluster.
 type PodIP struct {
 	IP string
 }
@@ -2966,6 +3010,10 @@ type EphemeralContainerCommon struct {
 	// already allocated to the pod.
 	// +optional
 	Resources ResourceRequirements
+	// Resources resize policy for the container.
+	// +featureGate=InPlacePodVerticalScaling
+	// +optional
+	ResizePolicy []ContainerResizePolicy
 	// +optional
 	VolumeMounts []VolumeMount
 	// volumeDevices is the list of block devices to be used by the container.
@@ -3085,6 +3133,11 @@ type PodStatus struct {
 	// This field is alpha-level and is only honored by servers that enable the EphemeralContainers feature.
 	// +optional
 	EphemeralContainerStatuses []ContainerStatus
+
+	// Any changes to container resources will automatically set this to "Proposed"
+	// +featureGate=InPlacePodVerticalScaling
+	// +optional
+	Resize PodResizeStatus
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -3608,17 +3661,18 @@ type ServiceAccountList struct {
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // Endpoints is a collection of endpoints that implement the actual service.  Example:
-//   Name: "mysvc",
-//   Subsets: [
-//     {
-//       Addresses: [{"ip": "10.10.1.1"}, {"ip": "10.10.2.2"}],
-//       Ports: [{"name": "a", "port": 8675}, {"name": "b", "port": 309}]
-//     },
-//     {
-//       Addresses: [{"ip": "10.10.3.3"}],
-//       Ports: [{"name": "a", "port": 93}, {"name": "b", "port": 76}]
-//     },
-//  ]
+//
+//	 Name: "mysvc",
+//	 Subsets: [
+//	   {
+//	     Addresses: [{"ip": "10.10.1.1"}, {"ip": "10.10.2.2"}],
+//	     Ports: [{"name": "a", "port": 8675}, {"name": "b", "port": 309}]
+//	   },
+//	   {
+//	     Addresses: [{"ip": "10.10.3.3"}],
+//	     Ports: [{"name": "a", "port": 93}, {"name": "b", "port": 76}]
+//	   },
+//	]
 type Endpoints struct {
 	metav1.TypeMeta
 	// +optional
@@ -3631,13 +3685,16 @@ type Endpoints struct {
 // EndpointSubset is a group of addresses with a common set of ports.  The
 // expanded set of endpoints is the Cartesian product of Addresses x Ports.
 // For example, given:
-//   {
-//     Addresses: [{"ip": "10.10.1.1"}, {"ip": "10.10.2.2"}],
-//     Ports:     [{"name": "a", "port": 8675}, {"name": "b", "port": 309}]
-//   }
+//
+//	{
+//	  Addresses: [{"ip": "10.10.1.1"}, {"ip": "10.10.2.2"}],
+//	  Ports:     [{"name": "a", "port": 8675}, {"name": "b", "port": 309}]
+//	}
+//
 // The resulting set of endpoints can be viewed as:
-//     a: [ 10.10.1.1:8675, 10.10.2.2:8675 ],
-//     b: [ 10.10.1.1:309, 10.10.2.2:309 ]
+//
+//	a: [ 10.10.1.1:8675, 10.10.2.2:8675 ],
+//	b: [ 10.10.1.1:309, 10.10.2.2:309 ]
 type EndpointSubset struct {
 	Addresses         []EndpointAddress
 	NotReadyAddresses []EndpointAddress

@@ -229,6 +229,17 @@ func GetContainerStatus(statuses []v1.ContainerStatus, name string) (v1.Containe
 	return v1.ContainerStatus{}, false
 }
 
+// GetIndexOfContainerStatus gets the index of status of container "name" from "statuses",
+// It returns (index, true) if "name" exists, else returns (0, false).
+func GetIndexOfContainerStatus(statuses []v1.ContainerStatus, name string) (int, bool) {
+	for i := range statuses {
+		if statuses[i].Name == name {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
 // GetExistingContainerStatus extracts the status of container "name" from "statuses",
 // It also returns if "name" exists.
 func GetExistingContainerStatus(statuses []v1.ContainerStatus, name string) v1.ContainerStatus {

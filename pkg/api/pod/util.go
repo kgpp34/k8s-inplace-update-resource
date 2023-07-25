@@ -17,6 +17,7 @@ limitations under the License.
 package pod
 
 import (
+	"k8s.io/apimachinery/pkg/util/diff"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -771,6 +772,47 @@ func runAsUserNameFieldsInUse(podSpec *api.PodSpec) bool {
 
 	return runAsUserNameFieldsInUseInAnyContainer(podSpec.Containers) ||
 		runAsUserNameFieldsInUseInAnyContainer(podSpec.InitContainers)
+}
+
+// inPlacePodVerticalScalingInUse returns true if pod spec is non-nil and ResizePolicy is set
+func inPlacePodVerticalScalingInUse(podSpec *api.PodSpec) bool {
+	if podSpec == nil {
+		return false
+	}
+	var inUse bool
+	VisitContainers(podSpec, func(c *api.Container) bool {
+		if len(c.ResizePolicy) > 0 {
+			inUse = true
+			return false
+		}
+		return true
+	})
+	return inUse
+}
+
+func MarkPodProposedForResize(oldPod, newPod *api.Pod) {
+	for i, c := range newPod.Spec.Containers {
+		if c.Resources.Requests == nil {
+			continue
+		}
+		if diff.ObjectDiff(oldPod.Spec.Containers[i].Resources, c.Resources) == "" {
+			continue
+		}
+		findContainerStatus := func(css []api.ContainerStatus, cName string) (api.ContainerStatus, bool) {
+			for i := range css {
+				if css[i].Name == cName {
+					return css[i], true
+				}
+			}
+			return api.ContainerStatus{}, false
+		}
+		if cs, ok := findContainerStatus(newPod.Status.ContainerStatuses, c.Name); ok {
+			if diff.ObjectDiff(c.Resources.Requests, cs.ResourcesAllocated) != "" {
+				newPod.Status.Resize = api.PodResizeStatusProposed
+				break
+			}
+		}
+	}
 }
 
 // runAsUserNameFieldsInUseInWindowsSecurityOptions returns true if the given WindowsSecurityContextOptions is

@@ -19,6 +19,7 @@ package validation
 import (
 	"encoding/json"
 	"fmt"
+	"k8s.io/kubernetes/pkg/apis/core/helper/qos"
 	"math"
 	"net"
 	"path"
@@ -3691,6 +3692,20 @@ func ValidatePodCreate(pod *core.Pod) field.ErrorList {
 	return allErrs
 }
 
+var updatablePodSpecFields = []string{
+	"`spec.containers[*].image`",
+	"`spec.initContainers[*].image`",
+	"`spec.activeDeadlineSeconds`",
+	"`spec.containers[*].resources` (for CPU/memory only)",
+}
+
+// TODO(InPlacePodVerticalScaling): Drop this var once InPlacePodVerticalScaling goes GA and featuregate is gone.
+var updatablePodSpecFieldsNoResources = []string{
+	"`spec.containers[*].image`",
+	"`spec.initContainers[*].image`",
+	"`spec.activeDeadlineSeconds`",
+}
+
 // ValidatePodUpdate tests to see if the update is legal for an end user to make. newPod is updated with fields
 // that cannot be changed.
 func ValidatePodUpdate(newPod, oldPod *core.Pod) field.ErrorList {
@@ -3733,6 +3748,14 @@ func ValidatePodUpdate(newPod, oldPod *core.Pod) field.ErrorList {
 		}
 	} else if oldPod.Spec.ActiveDeadlineSeconds != nil {
 		allErrs = append(allErrs, field.Invalid(specPath.Child("activeDeadlineSeconds"), newPod.Spec.ActiveDeadlineSeconds, "must not update from a positive integer to nil value"))
+	}
+
+	if utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {
+		oldQos := qos.GetPodQOS(oldPod)
+		newQos := qos.GetPodQOS(newPod)
+		if newQos != oldQos {
+			allErrs = append(allErrs, field.Invalid(fldPath, newQos, "Pod QoS is immutable"))
+		}
 	}
 
 	// handle updateable fields by munging those fields prior to deep equal comparison.
@@ -5818,4 +5841,35 @@ func ValidateSpreadConstraintNotRepeat(fldPath *field.Path, constraint core.Topo
 		}
 	}
 	return nil
+}
+
+var supportedResizeResources = sets.NewString(string(core.ResourceCPU), string(core.ResourceMemory))
+var supportedResizePolicies = sets.NewString(string(core.RestartNotRequired), string(core.RestartRequired))
+
+func validateResizePolicy(policyList []core.ContainerResizePolicy, fldPath *field.Path) field.ErrorList {
+	allErrors := field.ErrorList{}
+
+	// validate that resource name is not repeated, supported resource names and policy values are specified
+	resources := make(map[core.ResourceName]bool)
+	for i, p := range policyList {
+		if _, found := resources[p.ResourceName]; found {
+			allErrors = append(allErrors, field.Duplicate(fldPath.Index(i), p.ResourceName))
+		}
+		resources[p.ResourceName] = true
+		switch p.ResourceName {
+		case core.ResourceCPU, core.ResourceMemory:
+		case "":
+			allErrors = append(allErrors, field.Required(fldPath, ""))
+		default:
+			allErrors = append(allErrors, field.NotSupported(fldPath, p.ResourceName, supportedResizeResources.List()))
+		}
+		switch p.Policy {
+		case core.RestartNotRequired, core.RestartRequired:
+		case "":
+			allErrors = append(allErrors, field.Required(fldPath, ""))
+		default:
+			allErrors = append(allErrors, field.NotSupported(fldPath, p.Policy, supportedResizePolicies.List()))
+		}
+	}
+	return allErrors
 }

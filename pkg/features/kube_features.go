@@ -547,6 +547,12 @@ const (
 	//
 	// Enables topology aware service routing
 	ServiceTopology featuregate.Feature = "ServiceTopology"
+
+	// owner: @kgpp34
+	// alpha: v1.17
+	//
+	// Enables pod in place updating pod resources
+	InPlacePodVerticalScaling featuregate.Feature = "InPlacePodVerticalScaling"
 )
 
 func init() {
@@ -633,6 +639,7 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 	AllowInsecureBackendProxy:                      {Default: true, PreRelease: featuregate.Beta},
 	PodDisruptionBudget:                            {Default: true, PreRelease: featuregate.Beta},
 	ServiceTopology:                                {Default: false, PreRelease: featuregate.Alpha},
+	InPlacePodVerticalScaling:                      {Default: false, PreRelease: featuregate.Alpha},
 
 	// inherited features from generic apiserver, relisted here to get a conflict if it is changed
 	// unintentionally on either side:
